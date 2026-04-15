@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dijkstra Visualizer Pro - D3.js</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        :root {
+            --primary: #3b82f6;
+            --secondary: #64748b;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --bg: #0f172a;
+            --card: #1e293b;
+            --text: #f1f5f9;
+        }
+
+        body { 
+            font-family: 'Inter', system-ui, -apple-system, sans-serif; 
+            background: var(--bg); 
+            color: var(--text);
+            margin: 0; 
+            display: flex; 
+            height: 100vh; 
+            overflow: hidden; 
+        }
+
+        /* Layout */
+        .container { display: grid; grid-template-columns: 380px 1fr; width: 100%; }
+
+        /* Sidebar */
+        .sidebar { 
+            background: var(--card); 
+            padding: 24px; 
+            border-right: 1px solid #334155; 
+            overflow-y: auto; 
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        h2 { font-size: 1.25rem; margin: 0; color: var(--primary); display: flex; align-items: center; gap: 8px; }
+        
+        .input-group { display: flex; flex-direction: column; gap: 8px; }
+        label { font-size: 0.85rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; }
+        
+        textarea { 
+            background: #0f172a; 
+            color: #fff; 
+            border: 1px solid #334155; 
+            border-radius: 8px; 
+            padding: 12px; 
+            font-family: 'Fira Code', monospace; 
+            font-size: 0.9rem;
+            resize: vertical;
+            min-height: 120px;
+        }
+
+        input { 
+            background: #0f172a; 
+            color: #fff; 
+            border: 1px solid #334155; 
+            border-radius: 6px; 
+            padding: 8px; 
+        }
+
+        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        button { 
+            padding: 12px; 
+            border: none; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            font-weight: 600; 
+            transition: all 0.2s; 
+        }
+        .btn-draw { background: #334155; color: white; }
+        .btn-run { background: var(--primary); color: white; }
+        button:hover { opacity: 0.9; transform: translateY(-1px); }
+
+        /* Table */
+        .table-container { flex-grow: 1; overflow-y: auto; margin-top: 10px; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th { position: sticky; top: 0; background: #334155; padding: 10px; text-align: left; }
+        td { padding: 10px; border-bottom: 1px solid #334155; }
+        .current-row { background: rgba(59, 130, 246, 0.2); }
+
+        /* Graph Area */
+        .display-area { position: relative; background: #0b0f1a; flex-grow: 1; }
+        #graph-svg { width: 100%; height: 100%; }
+
+        /* SVG Elements */
+        .link { stroke: #334155; stroke-width: 2; transition: stroke 0.3s, stroke-width 0.3s; }
+        .link.active { stroke: var(--warning); stroke-width: 4; }
+        .link.path { stroke: var(--success); stroke-width: 6; stroke-linecap: round; }
+        
+        .node circle { fill: #1e293b; stroke: var(--primary); stroke-width: 2; transition: all 0.4s ease; }
+        .node.visited circle { fill: var(--primary); }
+        .node.current circle { fill: var(--warning); stroke: #fff; r: 24; }
+        .node.target circle { stroke: var(--success); stroke-width: 4; }
+        .node text { fill: white; font-size: 14px; font-weight: bold; pointer-events: none; text-anchor: middle; }
+        
+        .edge-label { fill: #94a3b8; font-size: 12px; font-weight: 500; }
+        .dist-label { fill: var(--primary); font-size: 11px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="sidebar">
+        <h2><span>⚡</span> Dijkstra Visualizer</h2>
+        
+        <div class="input-group">
+            <label>Danh sách cạnh (U V W)</label>
+            <textarea id="edgeInput">A B 4
+A C 2
+C B 1
+B D 5
+C D 8
+C E 10
+D E 2</textarea>
+        </div>
+
+        <div class="controls">
+            <div class="input-group">
+                <label>Bắt đầu</label>
+                <input type="text" id="startNode" value="A">
+            </div>
+            <div class="input-group">
+                <label>Kết thúc</label>
+                <input type="text" id="endNode" value="E">
+            </div>
+        </div>
+
+        <div class="controls" style="grid-template-columns: 1fr;">
+            <button class="btn-draw" onclick="initGraph()">1. Cập nhật Đồ thị</button>
+            <button class="btn-run" onclick="runDijkstra()">2. Chạy Thuật toán</button>
+        </div>
+
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Đỉnh</th>
+                        <th>Khoảng cách</th>
+                        <th>Trước đó</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="display-area">
+        <svg id="graph-svg"></svg>
+    </div>
+</div>
+
+<script>
+    let nodes = [];
+    let links = [];
+    const svg = d3.select("#graph-svg");
+    let simulation;
+
+    function initGraph() {
+        const text = document.getElementById('edgeInput').value.trim();
+        const lines = text.split('\n');
+        const nodeSet = new Set();
+        links = [];
+
+        lines.forEach(line => {
+            const parts = line.split(/\s+/);
+            if (parts.length >= 3) {
+                const [u, v, w] = parts;
+                nodeSet.add(u);
+                nodeSet.add(v);
+                links.push({ source: u, target: v, weight: parseInt(w) });
+            }
+        });
+
+        nodes = Array.from(nodeSet).map(id => ({ id }));
+        render();
+        updateTable({}, {});
+    }
+
+    function render() {
+        svg.selectAll("*").remove();
+        const width = document.getElementById('display-area-div')?.clientWidth || window.innerWidth - 380;
+        const height = window.innerHeight;
+
+        simulation = d3.forceSimulation(nodes)
+            .force("link", d3.forceLink(links).id(d => d.id).distance(150))
+            .force("charge", d3.forceManyBody().strength(-800))
+            .force("center", d3.forceCenter(width / 2, height / 2))
+            .force("collision", d3.forceCollide().radius(50));
+
+        // Vẽ cạnh
+        const link = svg.append("g")
+            .selectAll("line")
+            .data(links)
+            .enter().append("line")
+            .attr("class", "link")
+            .attr("id", d => `link-${d.source.id || d.source}-${d.target.id || d.target}`);
+
+        // Vẽ trọng số
+        const edgeLabels = svg.append("g")
+            .selectAll("text")
+            .data(links)
+            .enter().append("text")
+            .attr("class", "edge-label")
+            .attr("dy", -5)
+            .text(d => d.weight);
+
+        // Vẽ đỉnh
+        const node = svg.append("g")
+            .selectAll("g")
+            .data(nodes)
+            .enter().append("g")
+            .attr("class", "node")
+            .attr("id", d => `node-${d.id}`)
+            .call(d3.drag()
+                .on("start", dragstarted)
+                .on("drag", dragged)
+                .on("end", dragended));
+
+        node.append("circle").attr("r", 20);
+        node.append("text").attr("dy", 5).text(d => d.id);
+        
+        // Nhãn khoảng cách động trên đỉnh
+        node.append("text")
+            .attr("class", "dist-label")
+            .attr("dy", -30)
+            .attr("id", d => `dist-${d.id}`)
+            .text("");
+
+        simulation.on("tick", () => {
+            link.attr("x1", d => d.source.x)
+                .attr("y1", d => d.source.y)
+                .attr("x2", d => d.target.x)
+                .attr("y2", d => d.target.y);
+
+            edgeLabels.attr("x", d => (d.source.x + d.target.x) / 2)
+                      .attr("y", d => (d.source.y + d.target.y) / 2);
+
+            node.attr("transform", d => `translate(${d.x},${d.y})`);
+        });
+    }
+
+    async function runDijkstra() {
+        const startId = document.getElementById('startNode').value.toUpperCase();
+        const endId = document.getElementById('endNode').value.toUpperCase();
+
+        if (!nodes.find(n => n.id === startId)) return alert("Đỉnh bắt đầu không tồn tại!");
+
+        // Reset UI
+        d3.selectAll(".node").classed("visited current target", false);
+        d3.selectAll(".link").classed("active path", false);
+        d3.selectAll(".dist-label").text("");
+        d3.select(`#node-${endId}`).classed("target", true);
+
+        let dist = {};
+        let prev = {};
+        let pq = new Set();
+
+        nodes.forEach(n => {
+            dist[n.id] = Infinity;
+            prev[n.id] = null;
+            pq.add(n.id);
+        });
+
+        dist[startId] = 0;
+        updateTable(dist, prev, startId);
+
+        while (pq.size > 0) {
+            // Tìm đỉnh có khoảng cách nhỏ nhất
+            let u = Array.from(pq).reduce((minNode, node) => 
+                dist[node] < dist[minNode] ? node : minNode, Array.from(pq)[0]);
+
+            if (dist[u] === Infinity) break;
+
+            pq.delete(u);
+            
+            // Highlight đỉnh hiện tại
+            d3.select(`#node-${u}`).classed("current", true);
+            d3.select(`#dist-${u}`).text(dist[u]);
+            updateTable(dist, prev, u);
+            
+            await new Promise(r => setTimeout(r, 1000));
+
+            // Duyệt láng giềng
+            const neighbors = links.filter(l => 
+                (l.source.id === u || l.target.id === u) || (l.source === u || l.target === u)
+            );
+
+            for (let edge of neighbors) {
+                // Xử lý dữ liệu source/target của D3 (có thể là object hoặc string)
+                let sId = edge.source.id || edge.source;
+                let tId = edge.target.id || edge.target;
+                let v = sId === u ? tId : sId;
+
+                if (!pq.has(v)) continue;
+
+                // Highlight cạnh đang xét
+                const linkId = `#link-${sId}-${tId}, #link-${tId}-${sId}`;
+                d3.selectAll(linkId).classed("active", true);
+                
+                await new Promise(r => setTimeout(r, 400));
+
+                let alt = dist[u] + edge.weight;
+                if (alt < dist[v]) {
+                    dist[v] = alt;
+                    prev[v] = u;
+                    d3.select(`#dist-${v}`).text(alt);
+                    updateTable(dist, prev, u);
+                }
+                
+                d3.selectAll(linkId).classed("active", false);
+            }
+
+            d3.select(`#node-${u}`).classed("current", false).classed("visited", true);
+            
+            if (u === endId) break;
+        }
+
+        // Vẽ đường đi cuối cùng
+        let curr = endId;
+        while (prev[curr]) {
+            let p = prev[curr];
+            // Tìm và highlight cạnh trong đường đi
+            d3.selectAll(`.link`)
+                .filter(d => {
+                    let s = d.source.id || d.source;
+                    let t = d.target.id || d.target;
+                    return (s === curr && t === p) || (s === p && t === curr);
+                })
+                .classed("path", true);
+            curr = p;
+        }
+    }
+
+    function updateTable(dist, prev, currentU = null) {
+        const tbody = document.getElementById('tableBody');
+        tbody.innerHTML = "";
+        nodes.forEach(n => {
+            const id = n.id;
+            const d = dist[id] === undefined ? '-' : (dist[id] === Infinity ? '∞' : dist[id]);
+            const p = prev[id] || '-';
+            const isCurrent = id === currentU ? "class='current-row'" : "";
+            tbody.innerHTML += `<tr ${isCurrent}><td>${id}</td><td>${d}</td><td>${p}</td></tr>`;
+        });
+    }
+
+    // Drag functions
+    function dragstarted(event) { 
+        if (!event.active) simulation.alphaTarget(0.3).restart(); 
+        event.subject.fx = event.subject.x; 
+        event.subject.fy = event.subject.y; 
+    }
+    function dragged(event) { 
+        event.subject.fx = event.x; 
+        event.subject.fy = event.y; 
+    }
+    function dragended(event) { 
+        if (!event.active) simulation.alphaTarget(0); 
+        event.subject.fx = null; 
+        event.subject.fy = null; 
+    }
+
+    window.onload = initGraph;
+</script>
+</body>
+</html>
